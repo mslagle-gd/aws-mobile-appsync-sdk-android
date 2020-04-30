@@ -44,14 +44,11 @@ class SubscriptionAuthorizer {
     private final AWSCredentialsProvider mCredentialsProvider;
 
     SubscriptionAuthorizer(
-            AWSConfiguration awsConfiguration,
-            OidcAuthProvider mOidcAuthProvider,
-            Context applicationContext,
-            AWSCredentialsProvider credentialsProvider) {
-        this.awsConfiguration = awsConfiguration;
-        this.applicationContext = applicationContext;
-        this.mOidcAuthProvider = mOidcAuthProvider;
-        this.mCredentialsProvider = credentialsProvider;
+            AWSAppSyncClient.Builder builder) {
+        this.awsConfiguration = builder.mAwsConfiguration;
+        this.applicationContext = builder.mContext;
+        this.mOidcAuthProvider = builder.mOidcAuthProvider;
+        this.mCredentialsProvider = builder.mCredentialsProvider;
     }
 
     JSONObject getConnectionAuthorizationDetails() throws JSONException {
@@ -76,8 +73,14 @@ class SubscriptionAuthorizer {
             case "API_KEY" :
                 return getAuthorizationDetailsForApiKey(awsConfiguration);
             case "AWS_IAM" :
-                return getAuthorizationDetailsForIAM(connectionFlag, awsConfiguration,
-                        subscription, mCredentialsProvider);
+                return getAuthorizationDetailsForIAM(
+                        connectionFlag,
+                        awsConfiguration,
+                        subscription,
+                        getCredentialsProvider(mCredentialsProvider,
+                                awsConfiguration,
+                                applicationContext
+                        ));
             case "AMAZON_COGNITO_USER_POOLS" :
                 return getAuthorizationDetailsForUserpools(awsConfiguration, applicationContext);
             case "OPENID_CONNECT" :
@@ -101,17 +104,6 @@ class SubscriptionAuthorizer {
     private static JSONObject getAuthorizationDetailsForIAM(boolean connectionFlag, AWSConfiguration awsConfiguration,
                                                             Subscription subscription,
                                                             AWSCredentialsProvider credentialsProvider) throws JSONException {
-//        String identityPoolId;
-//        String regionStr;
-//        try {
-//            JSONObject identityPoolJSON = awsConfiguration.optJsonObject("CredentialsProvider")
-//                .getJSONObject("CognitoIdentity")
-//                .getJSONObject(awsConfiguration.getConfiguration());
-//            identityPoolId = identityPoolJSON.getString("PoolId");
-//            regionStr = identityPoolJSON.getString("Region");
-//        } catch (JSONException e) {
-//            throw new RuntimeException("Error reading identity pool information from awsconfiguration.json", e);
-//        }
 
         DefaultRequest canonicalRequest = new DefaultRequest("appsync");
 
@@ -135,8 +127,6 @@ class SubscriptionAuthorizer {
         } else {
             canonicalRequest.setContent(new ByteArrayInputStream(getDataJson(subscription).getBytes()));
         }
-
-//        AWSCredentialsProvider credentialsProvider = new CognitoCachingCredentialsProvider(applicationContext, identityPoolId, Regions.fromName(regionStr));
 
         String apiRegion = apiUrl.getAuthority().split("\\.")[2];
         if (connectionFlag){
@@ -174,6 +164,27 @@ class SubscriptionAuthorizer {
         } catch (JSONException | MalformedURLException exception) {
             throw new RuntimeException("Error constructing authorization message JSON.", exception);
         }
+    }
+
+    private static AWSCredentialsProvider getCredentialsProvider(AWSCredentialsProvider credentialsProvider,
+                                                                 AWSConfiguration awsConfiguration,
+                                                                 Context applicationContext) throws RuntimeException{
+         if (credentialsProvider != null) {
+             return credentialsProvider;
+         } else {
+            String identityPoolId;
+            String regionStr;
+            try {
+                JSONObject identityPoolJSON = awsConfiguration.optJsonObject("CredentialsProvider")
+                    .getJSONObject("CognitoIdentity")
+                    .getJSONObject(awsConfiguration.getConfiguration());
+                identityPoolId = identityPoolJSON.getString("PoolId");
+                regionStr = identityPoolJSON.getString("Region");
+            } catch (JSONException e) {
+                throw new RuntimeException("Error reading identity pool information from awsconfiguration.json", e);
+            }
+            return new CognitoCachingCredentialsProvider(applicationContext, identityPoolId, Regions.fromName(regionStr));
+         }
     }
 
     private static JSONObject getAuthorizationDetailsForOidc(
