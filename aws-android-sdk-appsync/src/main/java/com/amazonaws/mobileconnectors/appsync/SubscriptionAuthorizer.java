@@ -38,17 +38,18 @@ import java.util.Map;
  * Create one per {@link AWSAppSyncClient}.
  */
 class SubscriptionAuthorizer {
-    private final AWSConfiguration awsConfiguration;
-    private final Context applicationContext;
+    private final AWSConfiguration mAwsConfiguration;
+    private final Context mApplicationContext;
     private final OidcAuthProvider mOidcAuthProvider;
     private final AWSCredentialsProvider mCredentialsProvider;
+    private final AWSAppSyncClient.Builder builder;
 
-    SubscriptionAuthorizer(
-            AWSAppSyncClient.Builder builder) {
-        this.awsConfiguration = builder.mAwsConfiguration;
-        this.applicationContext = builder.mContext;
+    SubscriptionAuthorizer(AWSAppSyncClient.Builder builder) {
+        this.mAwsConfiguration = builder.mAwsConfiguration;
+        this.mApplicationContext = builder.mContext;
         this.mOidcAuthProvider = builder.mOidcAuthProvider;
         this.mCredentialsProvider = builder.mCredentialsProvider;
+        this.builder = builder;
     }
 
     JSONObject getConnectionAuthorizationDetails() throws JSONException {
@@ -63,7 +64,7 @@ class SubscriptionAuthorizer {
         // Get the Auth Mode from configuration json
         String authMode;
         try {
-            authMode = awsConfiguration.optJsonObject("AppSync").getString("AuthMode");
+            authMode = mAwsConfiguration.optJsonObject("AppSync").getString("AuthMode");
         } catch (JSONException e) {
             throw new RuntimeException("Failed to read AuthMode from awsconfiguration.json", e);
         }
@@ -71,45 +72,37 @@ class SubscriptionAuthorizer {
         // Construct the Json based on the Auth Mode
         switch (authMode) {
             case "API_KEY" :
-                return getAuthorizationDetailsForApiKey(awsConfiguration);
+                return getAuthorizationDetailsForApiKey();
             case "AWS_IAM" :
-                return getAuthorizationDetailsForIAM(
-                        connectionFlag,
-                        awsConfiguration,
-                        subscription,
-                        getCredentialsProvider(mCredentialsProvider,
-                                awsConfiguration,
-                                applicationContext
-                        ));
+                return getAuthorizationDetailsForIAM(connectionFlag, subscription);
             case "AMAZON_COGNITO_USER_POOLS" :
-                return getAuthorizationDetailsForUserpools(awsConfiguration, applicationContext);
+                return getAuthorizationDetailsForUserpools();
             case "OPENID_CONNECT" :
-                return getAuthorizationDetailsForOidc(awsConfiguration, mOidcAuthProvider);
+                return getAuthorizationDetailsForOidc();
             default :
                 throw new RuntimeException("Invalid AuthMode read from awsconfiguration.json.");
         }
     }
 
-    private static JSONObject getAuthorizationDetailsForApiKey(AWSConfiguration awsConfiguration) {
+    private JSONObject getAuthorizationDetailsForApiKey() {
         try {
             return new JSONObject()
-                .put("host", getHost(getApiUrl(awsConfiguration)))
+                .put("host", getHost(getApiUrl()))
                 .put("x-amz-date", ISO8601Timestamp.now())
-                .put("x-api-key", awsConfiguration.optJsonObject("AppSync").getString("ApiKey"));
+                .put("x-api-key", getApiKey());
         } catch (JSONException | MalformedURLException e) {
             throw new RuntimeException("Error constructing the authorization json for Api key. ", e);
         }
     }
 
-    private static JSONObject getAuthorizationDetailsForIAM(boolean connectionFlag, AWSConfiguration awsConfiguration,
-                                                            Subscription subscription,
-                                                            AWSCredentialsProvider credentialsProvider) throws JSONException {
+    private JSONObject getAuthorizationDetailsForIAM(boolean connectionFlag,
+                                                     Subscription subscription) throws JSONException {
 
         DefaultRequest canonicalRequest = new DefaultRequest("appsync");
 
         URI apiUrl;
         try {
-            final String baseUrl = getApiUrl(awsConfiguration);
+            final String baseUrl = getApiUrl();
             final String connectionUrl = connectionFlag ? baseUrl + "/connect" : baseUrl;
             apiUrl = new URI(connectionUrl);
         } catch (URISyntaxException e) {
@@ -131,10 +124,10 @@ class SubscriptionAuthorizer {
         String apiRegion = apiUrl.getAuthority().split("\\.")[2];
         if (connectionFlag){
             new AppSyncV4Signer(apiRegion, AppSyncV4Signer.ResourcePath.IAM_CONNECTION_RESOURCE_PATH)
-                .sign(canonicalRequest, credentialsProvider.getCredentials());
+                .sign(canonicalRequest, getCredentialsProvider().getCredentials());
         } else {
             new AppSyncV4Signer(apiRegion)
-                .sign(canonicalRequest, credentialsProvider.getCredentials());
+                .sign(canonicalRequest, getCredentialsProvider().getCredentials());
         }
 
         JSONObject authorizationMessage = new JSONObject();
@@ -144,7 +137,7 @@ class SubscriptionAuthorizer {
                 if (!headerEntry.getKey().equals("host")) {
                     authorizationMessage.put((String) headerEntry.getKey(), headerEntry.getValue());
                 } else {
-                    authorizationMessage.put("host", getHost(getApiUrl(awsConfiguration)));
+                    authorizationMessage.put("host", getHost(getApiUrl()));
                 }
             }
         } catch (JSONException | MalformedURLException e) {
@@ -153,45 +146,39 @@ class SubscriptionAuthorizer {
         return authorizationMessage;
     }
 
-    private static JSONObject getAuthorizationDetailsForUserpools(
-            AWSConfiguration awsConfiguration, Context applicationContext) {
-        CognitoUserPool cognitoUserPool = new CognitoUserPool(applicationContext, awsConfiguration);
+    private JSONObject getAuthorizationDetailsForUserpools() {
+        CognitoUserPool cognitoUserPool = new CognitoUserPool(mApplicationContext, mAwsConfiguration);
         BasicCognitoUserPoolsAuthProvider basicCognitoUserPoolsAuthProvider = new BasicCognitoUserPoolsAuthProvider(cognitoUserPool);
         try {
             return new JSONObject()
-                .put("host", getHost(getApiUrl(awsConfiguration)))
+                .put("host", getHost(getApiUrl()))
                 .put("Authorization", basicCognitoUserPoolsAuthProvider.getLatestAuthToken());
         } catch (JSONException | MalformedURLException exception) {
             throw new RuntimeException("Error constructing authorization message JSON.", exception);
         }
     }
 
-    private static AWSCredentialsProvider getCredentialsProvider(AWSCredentialsProvider credentialsProvider,
-                                                                 AWSConfiguration awsConfiguration,
-                                                                 Context applicationContext) throws RuntimeException{
-         if (credentialsProvider != null) {
-             return credentialsProvider;
-         } else {
-            String identityPoolId;
-            String regionStr;
-            try {
-                JSONObject identityPoolJSON = awsConfiguration.optJsonObject("CredentialsProvider")
-                    .getJSONObject("CognitoIdentity")
-                    .getJSONObject(awsConfiguration.getConfiguration());
-                identityPoolId = identityPoolJSON.getString("PoolId");
-                regionStr = identityPoolJSON.getString("Region");
-            } catch (JSONException e) {
-                throw new RuntimeException("Error reading identity pool information from awsconfiguration.json", e);
-            }
-            return new CognitoCachingCredentialsProvider(applicationContext, identityPoolId, Regions.fromName(regionStr));
-         }
+    private AWSCredentialsProvider getCredentialsProvider() throws RuntimeException{
+        if (mCredentialsProvider != null) { return mCredentialsProvider; }
+
+        try {
+            String regionStr = getRegion();
+            String identityPoolId = getIdentityPoolId();
+
+            return new CognitoCachingCredentialsProvider(
+                    mApplicationContext,
+                    identityPoolId,
+                    Regions.fromName(regionStr)
+            );
+        } catch (JSONException e) {
+            throw new RuntimeException("Error reading identity pool information from AWSConfiguration", e);
+        }
     }
 
-    private static JSONObject getAuthorizationDetailsForOidc(
-            AWSConfiguration awsConfiguration, OidcAuthProvider mOidcAuthProvider) {
+    private JSONObject getAuthorizationDetailsForOidc() {
         try {
             return new JSONObject()
-                .put("host", getHost(getApiUrl(awsConfiguration)))
+                .put("host", getHost(getApiUrl()))
                 .put("Authorization", mOidcAuthProvider.getLatestAuthToken());
         } catch (JSONException | MalformedURLException e) {
             throw new RuntimeException("Error constructing authorization message json", e);
@@ -213,8 +200,34 @@ class SubscriptionAuthorizer {
         }
     }
 
-    private static String getApiUrl(AWSConfiguration awsConfiguration) throws JSONException {
-        return awsConfiguration.optJsonObject("AppSync").getString("ApiUrl");
+    private String getRegion() throws JSONException {
+         return builder.mRegion != null
+                 ? builder.mRegion.getName()
+                 : mAwsConfiguration
+                 .optJsonObject("CredentialsProvider")
+                 .getJSONObject("CognitoIdentity")
+                 .getJSONObject(mAwsConfiguration.getConfiguration())
+                 .getString("Region");
+    }
+
+    private String getIdentityPoolId() throws JSONException {
+         return mAwsConfiguration
+                 .optJsonObject("CredentialsProvider")
+                 .getJSONObject("CognitoIdentity")
+                 .getJSONObject(mAwsConfiguration.getConfiguration())
+                 .getString("PoolId");
+    }
+
+    private String getApiUrl() throws JSONException {
+        return builder.mServerUrl != null
+                ? builder.mServerUrl
+                : mAwsConfiguration.optJsonObject("AppSync").getString("ApiUrl");
+    }
+
+    private String getApiKey() throws JSONException {
+         return builder.mApiKey != null
+                 ? builder.mApiKey.getAPIKey()
+                 : mAwsConfiguration.optJsonObject("AppSync").getString("ApiKey");
     }
 
     /**
