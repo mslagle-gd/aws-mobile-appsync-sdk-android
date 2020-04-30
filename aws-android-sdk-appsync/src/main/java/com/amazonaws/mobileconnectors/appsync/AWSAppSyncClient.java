@@ -552,8 +552,8 @@ public class AWSAppSyncClient {
                         throw new RuntimeException("AppSync configuration is missing from awsconfiguration.json");
                     }
 
-                    mServerUrl = appSyncJsonObject.getString("ApiUrl");
-                    mRegion = Regions.fromName(appSyncJsonObject.getString("Region"));
+                    mServerUrl = mServerUrl != null ? mServerUrl : appSyncJsonObject.getString("ApiUrl");
+                    mRegion = mRegion != null ? mRegion : Regions.fromName(appSyncJsonObject.getString("Region"));
 
                     if (mUseClientDatabasePrefix) {
                         // Populate the ClientDatabasePrefix from awsconfiguration.json
