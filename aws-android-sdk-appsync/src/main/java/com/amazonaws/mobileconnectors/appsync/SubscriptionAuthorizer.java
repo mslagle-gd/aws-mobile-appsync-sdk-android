@@ -14,6 +14,7 @@ import com.amazonaws.auth.AWSCredentialsProvider;
 import com.amazonaws.auth.CognitoCachingCredentialsProvider;
 import com.amazonaws.http.HttpMethodName;
 import com.amazonaws.mobile.config.AWSConfiguration;
+import com.amazonaws.mobileconnectors.appsync.sigv4.APIKeyAuthProvider;
 import com.amazonaws.mobileconnectors.appsync.sigv4.AppSyncV4Signer;
 import com.amazonaws.mobileconnectors.appsync.sigv4.BasicCognitoUserPoolsAuthProvider;
 import com.amazonaws.mobileconnectors.appsync.sigv4.OidcAuthProvider;
@@ -42,14 +43,18 @@ class SubscriptionAuthorizer {
     private final Context mApplicationContext;
     private final OidcAuthProvider mOidcAuthProvider;
     private final AWSCredentialsProvider mCredentialsProvider;
-    private final AWSAppSyncClient.Builder builder;
+    private final String mRegionStr;
+    private final String mServerUrl;
+    private final APIKeyAuthProvider mApiKeyProvider;
 
     SubscriptionAuthorizer(AWSAppSyncClient.Builder builder) {
         this.mAwsConfiguration = builder.mAwsConfiguration;
         this.mApplicationContext = builder.mContext;
         this.mOidcAuthProvider = builder.mOidcAuthProvider;
         this.mCredentialsProvider = builder.mCredentialsProvider;
-        this.builder = builder;
+        this.mRegionStr = builder.mRegion.getName();
+        this.mServerUrl = builder.mServerUrl;
+        this.mApiKeyProvider = builder.mApiKey;
     }
 
     JSONObject getConnectionAuthorizationDetails() throws JSONException {
@@ -201,13 +206,13 @@ class SubscriptionAuthorizer {
     }
 
     private String getRegion() throws JSONException {
-         return builder.mRegion != null
-                 ? builder.mRegion.getName()
+         return mRegionStr != null
+                 ? mRegionStr
                  : mAwsConfiguration
-                 .optJsonObject("CredentialsProvider")
-                 .getJSONObject("CognitoIdentity")
-                 .getJSONObject(mAwsConfiguration.getConfiguration())
-                 .getString("Region");
+                     .optJsonObject("CredentialsProvider")
+                     .getJSONObject("CognitoIdentity")
+                     .getJSONObject(mAwsConfiguration.getConfiguration())
+                     .getString("Region");
     }
 
     private String getIdentityPoolId() throws JSONException {
@@ -219,14 +224,14 @@ class SubscriptionAuthorizer {
     }
 
     private String getApiUrl() throws JSONException {
-        return builder.mServerUrl != null
-                ? builder.mServerUrl
+        return mServerUrl != null
+                ? mServerUrl
                 : mAwsConfiguration.optJsonObject("AppSync").getString("ApiUrl");
     }
 
     private String getApiKey() throws JSONException {
-         return builder.mApiKey != null
-                 ? builder.mApiKey.getAPIKey()
+         return mApiKeyProvider != null
+                 ? mApiKeyProvider.getAPIKey()
                  : mAwsConfiguration.optJsonObject("AppSync").getString("ApiKey");
     }
 
